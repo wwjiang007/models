@@ -16,6 +16,7 @@
 import argparse
 import unittest
 
+import tensorflow as tf  # pylint: disable=g-bad-import-order
 
 from official.utils.arg_parsers import parsers
 
@@ -25,10 +26,11 @@ class TestParser(argparse.ArgumentParser):
 
   def __init__(self):
     super(TestParser, self).__init__(parents=[
-        parsers.BaseParser(),
+        parsers.BaseParser(multi_gpu=True, num_gpu=False),
         parsers.PerformanceParser(num_parallel_calls=True, inter_op=True,
                                   intra_op=True, use_synthetic_data=True),
-        parsers.ImageModelParser(data_format=True)
+        parsers.ImageModelParser(data_format=True),
+        parsers.BenchmarkParser(benchmark_log_dir=True, bigquery_uploader=True)
     ])
 
 
@@ -42,12 +44,27 @@ class BaseTester(unittest.TestCase):
         data_dir="dfgasf",
         model_dir="dfsdkjgbs",
         train_epochs=534,
-        epochs_per_eval=15,
+        epochs_between_evals=15,
         batch_size=256,
+        hooks=["LoggingTensorHook"],
         num_parallel_calls=18,
         inter_op_parallelism_threads=5,
         intra_op_parallelism_thread=10,
         data_format="channels_first"
+    )
+
+    parser = TestParser()
+    parser.set_defaults(**defaults)
+
+    namespace_vars = vars(parser.parse_args([]))
+    for key, value in defaults.items():
+      assert namespace_vars[key] == value
+
+  def test_benchmark_setting(self):
+    defaults = dict(
+        hooks=["LoggingMetricHook"],
+        benchmark_log_dir="/tmp/12345",
+        gcp_project="project_abc",
     )
 
     parser = TestParser()
@@ -66,6 +83,24 @@ class BaseTester(unittest.TestCase):
 
     assert namespace.multi_gpu
     assert namespace.use_synthetic_data
+
+  def test_parse_dtype_info(self):
+    parser = TestParser()
+    for dtype_str, tf_dtype, loss_scale in [["fp16", tf.float16, 128],
+                                            ["fp32", tf.float32, 1]]:
+      args = parser.parse_args(["--dtype", dtype_str])
+      parsers.parse_dtype_info(args)
+
+      assert args.dtype == tf_dtype
+      assert args.loss_scale == loss_scale
+
+      args = parser.parse_args(["--dtype", dtype_str, "--loss_scale", "5"])
+      parsers.parse_dtype_info(args)
+
+      assert args.loss_scale == 5
+
+    with self.assertRaises(SystemExit):
+      parser.parse_args(["--dtype", "int8"])
 
 
 if __name__ == "__main__":
